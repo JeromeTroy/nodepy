@@ -31,6 +31,7 @@ from __future__ import absolute_import
 import numpy as np
 import copy
 import sympy
+from scipy.optimize import least_squares
 import nodepy.snp as snp
 import matplotlib.pyplot as plt
 from sympy import symbols, latex
@@ -44,6 +45,8 @@ try:
 except ImportError:
     import sympy.functions.combinatorial as combinatorial
 
+# default to levenberg-marquardt for implicit methods
+DEFAULT_IMPLICIT_SOLVER = lambda fun, x0: least_squares(fun, x0, method="lm")
 
 class LinearMultistepMethod(GeneralLinearMethod):
     r"""
@@ -582,17 +585,17 @@ class Adams_Bashforth(LinearMultistepMethod):
         Perform one forward step of Adams bashforth
         """
 
-        num_kick_start = len(self.beta)
+        num_kick_start = len(self.beta) - 1
         if len(u_curr) >= num_kick_start:
             # can use previous time steps
             prev_times = t_curr[-num_kick_start:]
             prev_solns = u_curr[-num_kick_start:]
             f_inputs = list(zip(prev_times, prev_solns))
             f_prev = np.array(list(map(
-                lambda j: f(f_inputs[j][0], f_inputs[j][1].ravel()), 
+                lambda j: f(f_inputs[j][0], f_inputs[j][1].ravel()),
                 range(num_kick_start)))).T
 
-            update = dt * f_prev @ self.beta
+            update = dt * f_prev @ self.beta[:-1]
         else:
             # need to generate more points
             # TODO: use something better than forward euler
@@ -654,7 +657,7 @@ def Nystrom(k):
     name = str(k)+'-step Nystrom'
     return LinearMultistepMethod(alpha,beta,name=name,shortname='Nys'+str(k))
 
-def Adams_Moulton(k):
+class Adams_Moulton(LinearMultistepMethod):
     r"""
         Construct the k-step, Adams-Moulton method.
         The methods are implicit and have order k+1.
@@ -676,21 +679,86 @@ def Adams_Moulton(k):
         Reference: :cite:`hairer1993`
     """
 
-    alpha=snp.zeros(k+1)
-    beta=snp.zeros(k+1)
-    alpha[k]=1
-    alpha[k-1]=-1
-    gamma=snp.zeros(k+1)
-    gamma[0]=1
-    beta[k]=1
-    betaj=snp.zeros(k+1)
-    for j in range(1,k+1):
-        gamma[j]= -sum(gamma[:j]/snp.arange(j+1,1,-1))
-        for i in range(0,j+1):
-            betaj[k-i]=(-1)**i*combinatorial.factorials.binomial(j,i)*gamma[j]
-        beta=beta+betaj
-    name=str(k)+'-step Adams-Moulton'
-    return LinearMultistepMethod(alpha,beta,name=name,shortname='AM'+str(k))
+    def __init__(self, k):
+        alpha=snp.zeros(k+1)
+        beta=snp.zeros(k+1)
+        alpha[k]=1
+        alpha[k-1]=-1
+        gamma=snp.zeros(k+1)
+        gamma[0]=1
+        beta[k]=1
+        betaj=snp.zeros(k+1)
+        for j in range(1,k+1):
+            gamma[j]= -sum(gamma[:j]/snp.arange(j+1,1,-1))
+            for i in range(0,j+1):
+                betaj[k-i]=(-1)**i*combinatorial.factorials.binomial(j,i)*gamma[j]
+            beta=beta+betaj
+        name=str(k)+'-step Adams-Moulton'
+        self.solver = DEFAULT_IMPLICIT_SOLVER
+        super().__init__(alpha,beta,name=name,shortname='AM'+str(k))
+
+    def set_solver(self, solver):
+        self.solver = solver
+
+    def __objective__(self, y, f_fix, rhs, dt):
+        """
+        Objective function to minimize
+
+        **Input**:
+            - y -- guess for next solution value
+            - f_fix -- ode function value at (t, y):
+                f_fix = f(t, y)
+            - rhs -- right hand side, or the sum of all the terms
+                in the LMM for times less than the current value
+            - dt -- current time step
+        **Output**:
+            - loss -- loss function value between the left and right
+                hand sides
+        """
+
+        loss = y - dt * self.beta[-1] * f_fix - rhs
+        return loss
+
+
+
+    def __step__(self, f, t_curr, u_curr, dt, x=None, use_butcher=False):
+        """
+        Forward stepping for Adams Moulton method
+
+        Requires implicit solving
+        """
+
+        num_kick_start = len(self.beta) - 1
+        if len(u_curr) >= num_kick_start:
+            # can use previous time steps
+            prev_times = t_curr[-num_kick_start:]
+            prev_solns = u_curr[-num_kick_start:]
+            f_inputs = list(zip(prev_times, prev_solns))
+            f_prev = np.array(list(map(
+                lambda j: f(f_inputs[j][0], f_inputs[j][1].ravel()),
+                range(num_kick_start)))).T
+
+            rhs = u_curr[-1] + dt * f_prev @ self.beta[:-1]
+        else:
+            # need to generate more points
+            # TODO: use something better than backward euler
+            rhs = u_curr[-1]
+
+        # build objective
+        f_fix_t = lambda y: f(t_curr[-1] + dt, y)
+        curr_obj = lambda y: self.__objective__(y, f_fix_t(y), rhs, dt)
+
+        # apply least squares to objective
+        result = self.solver(curr_obj, u_curr[-1])
+        u_next = result.x
+
+        # TODO: better error estimate
+        error_est = dt ** 3
+        return u_next, error_est
+
+
+
+
 
 def Milne_Simpson(k):
     r"""

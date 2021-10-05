@@ -52,14 +52,14 @@ class IVP(object):
             Any other problem-specific parameters.
 
     """
-    def __init__(self, f=None, u0=1., t0=0., T=1., exact=None, desc='', name=''):
+    def __init__(self, f=None, u0=1., t0=0., T=1., dt=1e-2, exact=None, desc='', name=''):
         self.u0  = u0
         self.rhs = f
         self.T   = T
         self.exact = exact
         self.description = desc
         self.t0 = t0
-        self.dt0 = 1.e-2 # This doesn't really belong here
+        self.dt0 = dt
         self.name = name
 
     def __repr__(self):
