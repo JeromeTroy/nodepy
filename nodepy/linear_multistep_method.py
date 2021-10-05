@@ -531,7 +531,7 @@ def _root_condition(p,tol=1.e-13):
 # Families of multistep methods
 # ======================================================
 
-def Adams_Bashforth(k):
+class Adams_Bashforth(LinearMultistepMethod):
     r"""
     Construct the k-step, Adams-Bashforth method.
     The methods are explicit and have order k.
@@ -557,23 +557,55 @@ def Adams_Bashforth(k):
 
         Reference: :cite:`hairer1993`
     """
-    one = Rational(1,1)
 
-    alpha=snp.zeros(k+1)
-    beta=snp.zeros(k+1)
-    alpha[k]=one
-    alpha[k-1]=-one
-    gamma=snp.zeros(k)
-    gamma[0]=one
-    beta[k-1]=one
-    betaj=snp.zeros(k+1)
-    for j in range(1,k):
-        gamma[j]=one-sum(gamma[:j]/snp.arange(j+1,1,-1))
-        for i in range(0,j+1):
-            betaj[k-i-1]=(-one)**i*combinatorial.factorials.binomial(j,i)*gamma[j]
-        beta=beta+betaj
-    name=str(k)+'-step Adams-Bashforth'
-    return LinearMultistepMethod(alpha,beta,name=name,shortname='AB'+str(k))
+    def __init__(self, k):
+        one = Rational(1,1)
+
+        alpha=snp.zeros(k+1)
+        beta=snp.zeros(k+1)
+        alpha[k]=one
+        alpha[k-1]=-one
+        gamma=snp.zeros(k)
+        gamma[0]=one
+        beta[k-1]=one
+        betaj=snp.zeros(k+1)
+        for j in range(1,k):
+            gamma[j]=one-sum(gamma[:j]/snp.arange(j+1,1,-1))
+            for i in range(0,j+1):
+                betaj[k-i-1]=(-one)**i*combinatorial.factorials.binomial(j,i)*gamma[j]
+            beta=beta+betaj
+        name=str(k)+'-step Adams-Bashforth'
+        super().__init__(alpha,beta,name=name,shortname='AB'+str(k))
+
+    def __step__(self, f, t_curr, u_curr, dt, x=None, use_butcher=False):
+        """
+        Perform one forward step of Adams bashforth
+        """
+
+        num_kick_start = len(self.beta)
+        if len(u_curr) >= num_kick_start:
+            # can use previous time steps
+            prev_times = t_curr[-num_kick_start:]
+            prev_solns = u_curr[-num_kick_start:]
+            f_inputs = list(zip(prev_times, prev_solns))
+            f_prev = np.array(list(map(
+                lambda j: f(f_inputs[j][0], f_inputs[j][1].ravel()), 
+                range(num_kick_start)))).T
+
+            update = dt * f_prev @ self.beta
+        else:
+            # need to generate more points
+            # TODO: use something better than forward euler
+            update = dt * f(t_curr[-1], u_curr[-1].ravel())
+
+
+        # build updated solution
+        u_new = np.array(u_curr[-1]) + update
+
+        # TODO: better error estimate
+        error_est = dt ** 3
+        return u_new, error_est
+
 
 def Nystrom(k):
     r"""

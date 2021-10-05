@@ -12,7 +12,7 @@ class ODESolver(object):
     def __init__(self):
         pass
 
-    def __step__(self):
+    def __step__(self, f, t_current, uu, dt, x=None, use_butcher=False):
         raise NotImplementedError
 
     def __call__(self,ivp,t0=0,N=5000,dt=None,errtol=None,controllertype='P',
@@ -109,7 +109,7 @@ class ODESolver(object):
                         out_now = True
 
                     if not hasattr(self, 'b_dense'):
-                        uu = numself.__step__(f,t_current,uu,dt,x=x,use_butcher=use_butcher)
+                        uu, _ = numself.__step__(f,t,u,dt,x=x,use_butcher=use_butcher)
                     else:
                         uu, _ = numself.__step__(f,t_current,uu,dt,[],x=x,use_butcher=use_butcher)
 
