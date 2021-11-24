@@ -834,7 +834,106 @@ def backward_difference_formula(k):
             alphaj[k-i]=(-1)**i*combinatorial.factorials.binomial(j,i)*gamma[j]
         alpha=alpha+alphaj
     name=str(k)+'-step BDF'
-    return LinearMultistepMethod(alpha,beta,name=name,shortname='BDF'+str(k))
+    return Backward_Difference_Formula(alpha,beta,
+                                name=name,shortname='BDF'+str(k))
+
+class Backward_Difference_Formula(LinearMultistepMethod):
+    r"""
+        Construct the k-step, Backward-Difference-formula method.
+        The methods are implicit and have order k+1.
+        They have the form:
+
+        ``\sum_{j=0}^{k} \alpha_j y_{n+k-j+1} = h \beta_j f(y_{n+1})``
+
+        They are generated using equation (1.22') from Hairer & Wanner III.1,
+            along with the binomial expansion.
+
+        **Examples**::
+
+            >>> import nodepy.linear_multistep_method as lm
+            >>> bdf4=lm.backward_difference_formula(4)
+            >>> bdf4.A_alpha_stability()
+            73
+
+        **Reference**: :cite:`hairer1993` pp. 364-365
+    """
+
+    def __init__(self, k):
+        alpha=snp.zeros(k+1)
+        beta=snp.zeros(k+1)
+        beta[k]=1
+        gamma=snp.zeros(k+1)
+        gamma[0]=1
+        alphaj=snp.zeros(k+1)
+        for j in range(1,k+1):
+            gamma[j]= sympy.Rational(1,j)
+            for i in range(0,j+1):
+                alphaj[k-i]=(-1)**i*combinatorial.factorials.binomial(j,i)*gamma[j]
+            alpha=alpha+alphaj
+        name=str(k)+'-step BDF'
+        self.solver = DEFAULT_IMPLICIT_SOLVER
+        super().__init__(alpha,beta,name=name,shortname='BDF'+str(k))
+
+    def set_solver(self, solver):
+        self.solver = solver
+
+    def __objective__(self, y, f_fix, rhs, dt):
+        """
+        Objective function to minimize
+
+        **Input**:
+            - y -- guess for next solution value
+            - f_fix -- ode function value at (t, y):
+                f_fix = f(t, y)
+            - rhs -- right hand side, or the sum of all the terms
+                in the LMM for times less than the current value
+            - dt -- current time step
+        **Output**:
+            - loss -- loss function value between the left and right
+                hand sides
+        """
+
+        loss = self.alpha[-1] * y - dt * self.beta[-1] * f_fix - rhs
+        return loss
+
+
+
+    def __step__(self, f, t_curr, u_curr, dt, x=None, use_butcher=False):
+        """
+        Forward stepping for Adams Moulton method
+
+        Requires implicit solving
+        """
+
+        num_kick_start = len(self.beta) - 1
+        if len(u_curr) >= num_kick_start:
+            # can use previous time steps
+            prev_times = t_curr[-num_kick_start:]
+            prev_solns = u_curr[-num_kick_start:]
+            f_inputs = list(zip(prev_times, prev_solns))
+            f_prev = np.array(list(map(
+                lambda j: f(f_inputs[j][0], f_inputs[j][1].ravel()),
+                range(num_kick_start)))).T
+
+            rhs = -np.array(prev_solns).T @ self.alpha[:-1] + \
+                dt * f_prev @ self.beta[:-1]
+        else:
+            # need to generate more points
+            # TODO: use something better than backward euler
+            rhs = u_curr[-1]
+
+        # build objective
+        f_fix_t = lambda y: f(t_curr[-1] + dt, y)
+        curr_obj = lambda y: self.__objective__(y, f_fix_t(y), rhs, dt)
+
+        # apply least squares to objective
+        result = self.solver(curr_obj, u_curr[-1])
+        u_next = result.x
+
+        # TODO: better error estimate
+        error_est = dt ** 3
+        return u_next, error_est
+
 
 def elm_ssp2(k):
     r"""
